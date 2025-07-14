@@ -1,0 +1,180 @@
+#!/bin/bash
+
+DRY_RUN=false
+
+echo "=== Pixstor BIOS Configuration Tool ==="
+logger -t Pixstor-BIOS "BIOS configuration script started by user $(whoami) on host $(hostname)"
+
+# Check for racadm
+if ! command -v racadm &>/dev/null; then
+    echo "ERROR: racadm command not found. Please install Dell OpenManage tools."
+    logger -t Pixstor-BIOS "ERROR: racadm not found"
+    exit 1
+fi
+
+# Test local racadm access
+if ! racadm getsysinfo &>/dev/null; then
+    echo "ERROR: Unable to communicate with local BMC via racadm."
+    logger -t Pixstor-BIOS "ERROR: racadm unable to communicate with BMC"
+    exit 1
+fi
+
+# System info
+MODEL=$(racadm getsysinfo | grep "System Model" | awk -F ':|= ' '{print $2}')
+BIOSVER=$(racadm getsysinfo | grep "BIOS Version" | awk -F ':|= ' '{print $2}')
+
+echo "System Model: $MODEL"
+echo "BIOS Version: $BIOSVER"
+logger -t Pixstor-BIOS "System Model: $MODEL | BIOS Version: $BIOSVER"
+
+# Dry-run option
+read -rp "Do you want to perform a dry-run (no changes made)? (Y/n): " dryrun_choice
+if [[ "$dryrun_choice" =~ ^[nN](o)?$ ]]; then
+    DRY_RUN=false
+    echo "Dry-run disabled — BIOS changes will be made."
+    logger -t Pixstor-BIOS "Dry-run disabled"
+else
+    DRY_RUN=true
+    echo "Dry-run enabled — no BIOS changes will be made."
+    logger -t Pixstor-BIOS "Dry-run enabled"
+fi
+
+# Select node config
+echo
+echo "Select BIOS configuration to apply:"
+echo "1) NVMe Node"
+echo "2) Standard Node"
+echo "3) Cancel"
+read -rp "Enter choice [1, 2, or 3]: " choice
+
+if [[ "$choice" == "1" ]]; then
+    CONFIG_NAME="NVMe Node"
+    BIOS_XML=$(cat <<EOF
+<SystemConfiguration>
+<Component FQDD="BIOS.Setup.1-1">
+    <Attribute Name="SubNumaCluster">Disabled</Attribute>
+    <Attribute Name="BootMode">Uefi</Attribute>
+    <Attribute Name="BootSeqRetry">Disabled</Attribute>
+    <Attribute Name="SetBootOrderDis">NIC.PxeDevice.1-1</Attribute>
+    <Attribute Name="SysProfile">PerfOptimized</Attribute>
+    <Attribute Name="SriovGlobalEnable">Enabled</Attribute>
+</Component>
+</SystemConfiguration>
+EOF
+)
+elif [[ "$choice" == "2" ]]; then
+    CONFIG_NAME="Standard Node"
+    BIOS_XML=$(cat <<EOF
+<SystemConfiguration>
+<Component FQDD="BIOS.Setup.1-1">
+    <Attribute Name="BootMode">Uefi</Attribute>
+    <Attribute Name="BootSeqRetry">Disabled</Attribute>
+    <Attribute Name="SetBootOrderDis">NIC.PxeDevice.1-1</Attribute>
+    <Attribute Name="SysProfile">PerfOptimized</Attribute>
+</Component>
+</SystemConfiguration>
+EOF
+)
+elif [[ "$choice" == "3" ]]; then
+    echo "Configuration cancelled."
+    logger -t Pixstor-BIOS "User cancelled BIOS configuration"
+    exit 0
+else
+    echo "Invalid selection. Exiting."
+    logger -t Pixstor-BIOS "Invalid input at BIOS profile selection. Exiting."
+    exit 1
+fi
+
+echo "Selected BIOS profile: $CONFIG_NAME"
+logger -t Pixstor-BIOS "Selected BIOS profile: $CONFIG_NAME"
+
+# Preview
+echo
+echo "===== BIOS Configuration Preview ====="
+echo "$BIOS_XML"
+echo "======================================"
+
+# Exit if dry-run
+if $DRY_RUN; then
+    echo "Dry-run complete. No BIOS changes made."
+    logger -t Pixstor-BIOS "Dry-run complete. No changes applied."
+    exit 0
+fi
+
+# Confirm apply
+read -rp "Apply this configuration to the system? (y/N): " confirm
+if [[ ! "$confirm" =~ ^[yY](es)?$ ]]; then
+    echo "Exiting without changes."
+    logger -t Pixstor-BIOS "User declined to apply BIOS configuration."
+    exit 0
+fi
+
+# Apply BIOS config
+tmpfile=$(mktemp /tmp/biosconfig-XXXX.xml)
+echo "$BIOS_XML" > "$tmpfile"
+echo "Applying BIOS settings..."
+logger -t Pixstor-BIOS "Applying BIOS settings using temporary file $tmpfile"
+
+racadm_output=$(racadm set -t xml -f "$tmpfile")
+rm -f "$tmpfile"
+
+# Extract Job ID from output
+job_id=$(echo "$racadm_output" | grep -oE 'JID_[0-9]+' || true)
+
+if [[ -z "$job_id" ]]; then
+    echo "ERROR: Failed to submit BIOS job or Job ID not returned."
+    logger -t Pixstor-BIOS "ERROR: BIOS job submission failed or no Job ID found"
+    exit 1
+fi
+
+echo "BIOS job submitted: $job_id"
+logger -t Pixstor-BIOS "BIOS job submitted: $job_id"
+
+# Wait for job to complete
+echo -n "Waiting for BIOS job to complete"
+logger -t Pixstor-BIOS "Waiting for job $job_id to complete"
+MAX_WAIT=300
+SLEEP_INTERVAL=5
+elapsed=0
+job_status=""
+
+while [[ $elapsed -lt $MAX_WAIT ]]; do
+    sleep $SLEEP_INTERVAL
+    echo -n "."
+    job_status=$(racadm jobqueue view | grep "$job_id" | awk '{print $5}')
+    
+    if [[ -z "$job_status" ]]; then
+        break  # job no longer in queue
+    fi
+
+    if [[ "$job_status" == "Completed" ]]; then
+        break
+    elif [[ "$job_status" == "Failed" ]]; then
+        echo
+        echo "ERROR: BIOS job $job_id failed."
+        logger -t Pixstor-BIOS "ERROR: BIOS job $job_id failed"
+        exit 1
+    fi
+
+    elapsed=$((elapsed + SLEEP_INTERVAL))
+done
+
+echo
+if [[ "$job_status" == "Completed" || -z "$job_status" ]]; then
+    echo "BIOS configuration job completed successfully."
+    logger -t Pixstor-BIOS "BIOS configuration job $job_id completed"
+else
+    echo "WARNING: BIOS job $job_id did not complete in time (status: $job_status)"
+    logger -t Pixstor-BIOS "WARNING: BIOS job $job_id timed out or incomplete"
+fi
+
+# Ask to reboot
+read -rp "Would you like to reboot the system now for changes to take effect? (y/N): " reboot_choice
+if [[ "$reboot_choice" =~ ^[yY](es)?$ ]]; then
+    echo "Rebooting..."
+    logger -t Pixstor-BIOS "System reboot initiated by user"
+    reboot
+else
+    echo "Reminder: BIOS changes require a reboot to take effect."
+    logger -t Pixstor-BIOS "User chose not to reboot. Manual reboot required."
+fi
