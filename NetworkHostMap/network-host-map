@@ -1,0 +1,395 @@
+#!/bin/bash
+
+# Fresh NIC Mapping Generator Script - MLAG Aware
+# Generates network interface to physical slot mapping table
+
+set -uo pipefail
+
+# Configuration
+SWITCH_IPS=()
+SWITCH_USER="admin"
+CHECK_SWITCHES=false
+
+# Function to display usage
+usage() {
+    echo "Usage: $0 [options] [hostname]"
+    echo "Options:"
+    echo "  -s, --switches IP1,IP2    Comma-separated switch IPs"
+    echo "  -u, --user USERNAME       Switch SSH username"
+    echo "  -h, --help               Show help"
+    exit 1
+}
+
+# Check requirements
+check_requirements() {
+    for cmd in racadm ip; do
+        if ! command -v $cmd >/dev/null 2>&1; then
+            echo "Error: Missing command: $cmd"
+            exit 1
+        fi
+    done
+}
+
+# Get hostname
+get_hostname() {
+    if [ $# -gt 0 ] && [ -n "$1" ]; then
+        echo "$1"
+    else
+        hostname -s 2>/dev/null | tr '[:lower:]' '[:upper:]' || echo "UNKNOWN"
+    fi
+}
+
+# Parse racadm data
+parse_racadm_data() {
+    echo "Collecting hardware inventory..." >&2
+    racadm hwinventory 2>/dev/null | awk '
+    BEGIN { 
+        current_fqdd = ""
+        current_mac = ""
+        current_desc = ""
+        current_speed = ""
+        current_duplex = ""
+    }
+    
+    /^\[InstanceID: NIC\./ {
+        match($0, /NIC\.[^]]+/)
+        current_fqdd = substr($0, RSTART, RLENGTH)
+        current_mac = ""
+        current_desc = ""
+        current_speed = ""
+        current_duplex = ""
+    }
+    
+    /^---/ {
+        if (current_fqdd != "" && current_mac != "" && current_mac != "00:00:00:00:00:00") {
+            status = "DOWN"
+            if (current_speed != "" && current_speed != "Unknown" && current_duplex != "" && current_duplex != "Unknown") {
+                status = "UP"
+            }
+            print current_fqdd "|" current_mac "|" current_desc "|" status "|" current_speed
+        }
+        current_fqdd = ""
+    }
+    
+    current_fqdd != "" {
+        if (/^PermanentMACAddress = /) {
+            gsub(/^PermanentMACAddress = /, "")
+            current_mac = $0
+        }
+        if (/^DeviceDescription = /) {
+            gsub(/^DeviceDescription = /, "")
+            current_desc = $0
+        }
+        if (/^LinkSpeed = /) {
+            gsub(/^LinkSpeed = /, "")
+            current_speed = $0
+        }
+        if (/^LinkDuplex = /) {
+            gsub(/^LinkDuplex = /, "")
+            current_duplex = $0
+        }
+    }
+    '
+}
+
+# Parse ip link data
+parse_ip_link_data() {
+    echo "Collecting network interface data..." >&2
+    ip link list 2>/dev/null
+}
+
+# Query switch for MAC
+query_switch_for_mac() {
+    local mac="$1"
+    local switch_ip="$2"
+    
+    local result=$(timeout 5 ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no \
+        "${SWITCH_USER}@${switch_ip}" \
+        "/usr/sbin/bridge fdb show | grep -i '$mac' | head -1" 2>/dev/null </dev/null || echo "")
+    
+    if [[ -n "$result" ]]; then
+        # Extract the interface name (3rd field)
+        echo "$result" | awk '{print $3}'
+    else
+        echo ""
+    fi
+}
+
+# Find MAC on switches - return ALL connections for MLAG
+find_mac_on_switches() {
+    local mac="$1"
+    local linux_interface="$2"
+    
+    if [[ "$CHECK_SWITCHES" == "false" ]]; then
+        echo "N/A"
+        return 0
+    fi
+    
+    local all_results=()
+    
+    # Collect results from ALL switches
+    for switch_ip in "${SWITCH_IPS[@]}"; do
+        local port=$(query_switch_for_mac "$mac" "$switch_ip")
+        if [[ -n "$port" && ("$port" =~ ^swp || "$port" == "peerlink" || "$port" =~ ^bond) ]]; then
+            all_results+=("${switch_ip}:${port}")
+        fi
+    done
+    
+    # If we found results, return all of them (comma-separated for MLAG)
+    if [[ ${#all_results[@]} -gt 0 ]]; then
+        # Sort to ensure consistent output and join with commas
+        printf '%s\n' "${all_results[@]}" | sort | paste -sd ','
+        return 0
+    fi
+    
+    # If not found and interface seems to be UP, try traffic generation
+    if [[ "$linux_interface" != "NOT FOUND" && "$linux_interface" != *"DOWN"* ]]; then
+        # Try different interface naming patterns
+        local base_interfaces=()
+        
+        # If it's a bridge, try to find underlying interface
+        if [[ "$linux_interface" =~ ^br_25g([0-9]+) ]]; then
+            local num="${BASH_REMATCH[1]}"
+            base_interfaces+=("25g$num")
+        elif [[ "$linux_interface" =~ ^br_100g([0-9]+) ]]; then
+            local num="${BASH_REMATCH[1]}"
+            base_interfaces+=("100g$num")
+        else
+            base_interfaces+=("$linux_interface")
+        fi
+        
+        # Try generating traffic from each possible interface
+        for iface in "${base_interfaces[@]}"; do
+            # Skip if interface doesn't exist
+            if ! ip link show "$iface" >/dev/null 2>&1; then
+                continue
+            fi
+            
+            # Generate ARP traffic (more likely to use actual MAC)
+            timeout 3 arping -I "$iface" -c 2 -A 192.168.1.1 >/dev/null 2>&1 || true
+            
+            # Also try ping
+            timeout 3 ping -I "$iface" -c 1 8.8.8.8 >/dev/null 2>&1 || true
+        done
+        
+        # Wait a bit for bridge table to update
+        sleep 2
+        
+        # Try lookup again after traffic generation from ALL switches
+        all_results=()
+        for switch_ip in "${SWITCH_IPS[@]}"; do
+            local port=$(query_switch_for_mac "$mac" "$switch_ip")
+            if [[ -n "$port" && ("$port" =~ ^swp || "$port" == "peerlink" || "$port" =~ ^bond) ]]; then
+                all_results+=("${switch_ip}:${port}")
+            fi
+        done
+        
+        if [[ ${#all_results[@]} -gt 0 ]]; then
+            # Sort to ensure consistent output and join with commas
+            printf '%s\n' "${all_results[@]}" | sort | paste -sd ','
+            return 0
+        fi
+    fi
+    
+    echo "NOT FOUND"
+    return 0
+}
+
+# Generate mapping
+generate_mapping() {
+    local hostname="$1"
+    local racadm_data="$2"
+    local ip_data="$3"
+    
+    # Create MAC to interface mapping
+    declare -A mac_to_interface
+    declare -A mac_to_status
+    
+    # Parse ip link output
+    while IFS= read -r line; do
+        if [[ $line =~ ^[0-9]+:\ ([^:]+):.*state\ ([A-Z]+) ]]; then
+            local interface="${BASH_REMATCH[1]}"
+            local state="${BASH_REMATCH[2]}"
+        elif [[ $line =~ link/ether\ ([0-9a-fA-F:]+) ]] && [[ -n ${interface:-} ]]; then
+            local mac="${BASH_REMATCH[1],,}"
+            if [[ -n "$mac" && "$mac" =~ ^[0-9a-f:]+$ ]]; then
+                mac_to_interface["$mac"]="$interface"
+                mac_to_status["$mac"]="$state"
+            fi
+            interface=""
+        fi
+    done <<< "$ip_data"
+    
+    # Print header
+    echo "${hostname^^} - Network Interface to Physical Slot Mapping"
+    echo "======================================================"
+    echo ""
+    
+    if [[ "$CHECK_SWITCHES" == "true" ]]; then
+        echo "+-------------------+-------------------------+-------------------+----------------------+----------+----------------------------------+"
+        echo "| Physical Slot     | RACADM FQDD             | MAC Address       | Linux Interface      | Status   | Switch Port(s)                   |"
+        echo "+-------------------+-------------------------+-------------------+----------------------+----------+----------------------------------+"
+    else
+        echo "+-------------------+-------------------------+-------------------+----------------------+----------+"
+        echo "| Physical Slot     | RACADM FQDD             | MAC Address       | Linux Interface      | Status   |"
+        echo "+-------------------+-------------------------+-------------------+----------------------+----------+"
+    fi
+    
+    # Process each NIC entry
+    local temp_file=$(mktemp)
+    echo "$racadm_data" > "$temp_file"
+    
+    while IFS='|' read -r fqdd mac desc status speed; do
+        [[ -z "$fqdd" || -z "$mac" ]] && continue
+        
+        # Skip malformed MAC addresses
+        if [[ ! "$mac" =~ ^[0-9a-fA-F:]+$ ]]; then
+            continue
+        fi
+        
+        # Determine slot description
+        local slot_desc=""
+        if [[ $fqdd =~ ^NIC\.Embedded\.([0-9]+)-([0-9]+)-([0-9]+) ]]; then
+            slot_desc="Embedded Port ${BASH_REMATCH[2]}"
+        elif [[ $fqdd =~ ^NIC\.Integrated\.([0-9]+)-([0-9]+)-([0-9]+) ]]; then
+            slot_desc="Integrated Port ${BASH_REMATCH[2]}"
+        elif [[ $fqdd =~ ^NIC\.Slot\.([0-9]+)-([0-9]+)-([0-9]+) ]]; then
+            slot_desc="Slot ${BASH_REMATCH[1]} Port ${BASH_REMATCH[2]}"
+        fi
+        
+        # Find matching Linux interface
+        local linux_interface="NOT FOUND"
+        local link_status="UNKNOWN"
+        local mac_lower="${mac,,}"
+        
+        if [[ -n "$mac_lower" && -n "${mac_to_interface[$mac_lower]:-}" ]]; then
+            linux_interface="${mac_to_interface[$mac_lower]}"
+            link_status="${mac_to_status[$mac_lower]:-UNKNOWN}"
+            
+            # Add altname if available
+            local altname=$(echo "$ip_data" | grep -A1 "\\b$linux_interface\\b" | grep "altname" | sed 's/.*altname //' | head -1 || true)
+            if [[ -n "$altname" ]]; then
+                linux_interface="$linux_interface ($altname)"
+            fi
+        fi
+        
+        # Query switches for MAC location (skip management/1G interfaces)
+        local switch_port="N/A"
+        if [[ "$CHECK_SWITCHES" == "true" ]]; then
+            # Skip interfaces that won't be on Cumulus switches
+            if [[ "$linux_interface" =~ ^(1g|man)[0-9]+ || "$linux_interface" =~ ^(eno|enp).* ]]; then
+                switch_port="SKIPPED"
+            else
+                switch_port=$(find_mac_on_switches "$mac" "$linux_interface")
+            fi
+        fi
+        
+        # Print the row
+        if [[ "$CHECK_SWITCHES" == "true" ]]; then
+            printf "| %-17s | %-23s | %-17s | %-20s | %-8s | %-32s |\n" \
+                "$slot_desc" "$fqdd" "$mac" "$linux_interface" "$link_status" "$switch_port"
+        else
+            printf "| %-17s | %-23s | %-17s | %-20s | %-8s |\n" \
+                "$slot_desc" "$fqdd" "$mac" "$linux_interface" "$link_status"
+        fi
+    done < "$temp_file"
+    
+    rm -f "$temp_file"
+    
+    # Print footer
+    if [[ "$CHECK_SWITCHES" == "true" ]]; then
+        echo "+-------------------+-------------------------+-------------------+----------------------+----------+----------------------------------+"
+    else
+        echo "+-------------------+-------------------------+-------------------+----------------------+----------+"
+    fi
+    
+    echo ""
+    echo "Card Types:"
+    local embedded_count=$(echo "$racadm_data" | grep -c "Embedded" 2>/dev/null || echo "0")
+    local integrated_count=$(echo "$racadm_data" | grep -c "Integrated" 2>/dev/null || echo "0")
+    
+    if [[ "$embedded_count" -gt 0 ]]; then
+        echo "- Embedded: ${embedded_count}x 1GbE Broadcom"
+    fi
+    
+    if [[ "$integrated_count" -gt 0 ]]; then
+        echo "- Integrated: ${integrated_count}x 10GbE Intel OCP"
+    fi
+    
+    local slots=$(echo "$racadm_data" | grep "Slot" | sed 's/.*Slot \([0-9]\).*/\1/' | sort -u 2>/dev/null)
+    for slot in $slots; do
+        if [[ -n "$slot" ]]; then
+            local slot_count=$(echo "$racadm_data" | grep -c "Slot $slot" 2>/dev/null || echo "0")
+            if [[ "$slot_count" -gt 0 ]]; then
+                echo "- Slot $slot: ${slot_count}x ports"
+            fi
+        fi
+    done
+}
+
+# Main function
+main() {
+    local hostname=""
+    
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -s|--switches)
+                CHECK_SWITCHES=true
+                IFS=',' read -ra SWITCH_IPS <<< "$2"
+                shift 2
+                ;;
+            -u|--user)
+                SWITCH_USER="$2"
+                shift 2
+                ;;
+            -h|--help)
+                usage
+                ;;
+            -*)
+                echo "Unknown option: $1"
+                usage
+                ;;
+            *)
+                hostname="$1"
+                shift
+                ;;
+        esac
+    done
+    
+    # Get hostname if not provided
+    if [[ -z "$hostname" ]]; then
+        hostname=$(get_hostname)
+    fi
+    
+    # Check requirements
+    check_requirements
+    
+    echo "Generating NIC mapping for $hostname..."
+    if [[ "$CHECK_SWITCHES" == "true" ]]; then
+        echo "Will query switches: ${SWITCH_IPS[*]}"
+    fi
+    echo ""
+    
+    # Collect and process data
+    local racadm_data=$(parse_racadm_data)
+    local ip_data=$(parse_ip_link_data)
+    
+    # Debug: Check if we got any data
+    if [[ -z "$racadm_data" ]]; then
+        echo "Error: No NIC data found from racadm. Check if racadm is working:"
+        echo "Try running: racadm hwinventory | grep -A 5 'NIC\.'"
+        return 1
+    fi
+    
+    echo "Found $(echo "$racadm_data" | wc -l) NIC entries"
+    
+    # Generate mapping
+    generate_mapping "$hostname" "$racadm_data" "$ip_data"
+    
+    echo ""
+    echo "Mapping generation complete!"
+}
+
+# Run main function
+main "$@"

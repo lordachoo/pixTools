@@ -19,3 +19,7 @@ Python3-based SaltStack visualization application that creates ASCII or PNG/SVG 
 ### [setROCEPrio](setROCEPrio/README.md)
 
 A utility script for configuring RDMA over Converged Ethernet (RoCE) priority settings on Mellanox network interfaces. Optimizes network performance for PixStor environments by setting appropriate priority masks and LLDP/DCBX parameters.
+
+### [NetworkHostMap](NetworkHostMap/README.md)
+
+A utility for generating comprehensive network interface to physical slot mapping tables for PixStor servers. Maps physical NIC slots to Linux interfaces and optionally identifies switch port connections with MLAG awareness. ** VERY EXPERIMENTAL AS OF 7/21/2025 **
