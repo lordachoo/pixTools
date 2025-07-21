@@ -1,0 +1,42 @@
+#!/bin/bash
+# ROCE_CC_PRIO_MASK_P2 - This sets the ROCE PRIO to 3 which is what we want for both P1/2 Ports
+# The rest of it is LLDP/Other stuff 
+
+# Check if arguments are provided
+
+lshw -c network | grep Mellanox -A 3 -B 3
+
+if [ $# -eq 0 ]; then
+    echo "Usage: $0 <PCI_ID1> [PCI_ID2] [PCI_ID3] ..."
+    #echo "$ lshw -c network | grep Mellanox -A 3 -B 3 - To get the PCI IDs"
+    echo "Example: $0 37:00.0 37:00.1 8b:00.0 8b:00.1"
+    exit 1
+fi
+
+# Loop through all provided PCI IDs
+for pci_id in "$@"; do
+    echo "Configuring device: $pci_id"
+    
+    mstconfig -d "$pci_id" set \
+        ROCE_CC_PRIO_MASK_P2=8 \
+        RPG_THRESHOLD_P2=1 \
+        DCE_TCP_G_P2=1019 \
+        LLDP_NB_DCBX_P2=TRUE \
+        LLDP_NB_TX_MODE_P2=2 \
+        LLDP_NB_RX_MODE_P2=2 \
+        ROCE_CC_PRIO_MASK_P1=8 \
+        RPG_THRESHOLD_P1=1 \
+        DCE_TCP_G_P1=1019 \
+        LLDP_NB_DCBX_P1=TRUE \
+        LLDP_NB_TX_MODE_P1=2 \
+        LLDP_NB_RX_MODE_P1=2
+    
+    if [ $? -eq 0 ]; then
+        echo "✓ Successfully configured $pci_id"
+    else
+        echo "✗ Failed to configure $pci_id"
+    fi
+    echo "---"
+done
+
+echo "Configuration complete for all devices."

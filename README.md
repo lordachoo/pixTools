@@ -15,3 +15,7 @@ Script for setting DELL iDRAC BIOS Configuration payloads for different PixStor 
 ### [SaltState Visualizer](saltStateViz/README.md)
 
 Python3-based SaltStack visualization application that creates ASCII or PNG/SVG visualizations of PixStor Salt States. Helps administrators understand complex Salt state relationships and dependencies (requires GraphViz for visual outputs).
+
+### [setROCEPrio](setROCEPrio/README.md)
+
+A utility script for configuring RDMA over Converged Ethernet (RoCE) priority settings on Mellanox network interfaces. Optimizes network performance for PixStor environments by setting appropriate priority masks and LLDP/DCBX parameters.
