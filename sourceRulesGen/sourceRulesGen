@@ -1,0 +1,86 @@
+#!/bin/bash
+
+# source_rules_gen.sh
+# Script to generate source-based routing rules for network interfaces
+# Usage: ./source_rules_gen.sh -I <interfaces> (comma-separated, must be 2 or 4 interfaces)
+
+# Function to display usage information
+usage() {
+    echo "Usage: $0 -I <interfaces>"
+    echo "  -I <interfaces>  Comma-separated list of interfaces (must be 2 or 4)"
+    echo "                   Example: -I 100g1,100g2,100g3,100g4"
+    exit 1
+}
+
+# Parse command line arguments
+while getopts "I:" opt; do
+    case $opt in
+        I) INTERFACES=$(echo $OPTARG | tr ',' ' ') ;;
+        *) usage ;;
+    esac
+done
+
+# Check if interfaces are provided
+if [ -z "$INTERFACES" ]; then
+    echo "Error: No interfaces specified."
+    usage
+fi
+
+# Count the number of interfaces
+INTERFACE_COUNT=$(echo $INTERFACES | wc -w)
+
+# Check if the number of interfaces is valid (must be 2 or 4)
+if [ $INTERFACE_COUNT -ne 2 ] && [ $INTERFACE_COUNT -ne 4 ]; then
+    echo "Error: Must specify exactly 2 or 4 interfaces."
+    usage
+fi
+
+# Function to extract network address from IP/CIDR
+get_network_address() {
+    local ip_with_cidr=$1
+    local ip=$(echo $ip_with_cidr | cut -d'/' -f1)
+    local cidr=$(echo $ip_with_cidr | cut -d'/' -f2)
+    
+    # Split IP into octets
+    IFS='.' read -r -a octets <<< "$ip"
+    
+    # Calculate network address (simplified for common subnet masks)
+    local network="${octets[0]}.${octets[1]}.${octets[2]}.0/${cidr}"
+    echo $network
+}
+
+# Generate the routing rules
+TABLE_BASE=1000
+INDEX=1
+
+for interface in $INTERFACES; do
+    # Get interface IP address and CIDR
+    IP_INFO=$(ip -4 addr show $interface | grep -oP 'inet \K[\d./]+')
+    
+    if [ -z "$IP_INFO" ]; then
+        echo "Error: Could not get IP information for interface $interface" >&2
+        continue
+    fi
+    
+    # Extract IP address and calculate network address
+    IP_ADDR=$(echo $IP_INFO | cut -d'/' -f1)
+    NETWORK_ADDR=$(get_network_address "$IP_INFO")
+    
+    # Calculate table number
+    TABLE_NUM=$((TABLE_BASE + INDEX))
+    
+    # Print the routing rules
+    echo "nmcli con mod ${interface} +ipv4.routing-rules \"priority 10 from ${IP_ADDR} table ${TABLE_NUM}\""
+    echo "nmcli con mod ${interface} +ipv4.routes \"${NETWORK_ADDR} table=${TABLE_NUM}\""
+    
+    # Increment the index
+    INDEX=$((INDEX + 1))
+done
+
+# Print the reload command
+echo "nmcli con reload"
+
+# Print the reapply commands for each interface
+for interface in $INTERFACES; do
+    echo "nmcli dev reapply ${interface}"
+done

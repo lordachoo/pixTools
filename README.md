@@ -23,3 +23,7 @@ A utility script for configuring RDMA over Converged Ethernet (RoCE) priority se
 ### [NetworkHostMap](NetworkHostMap/README.md)
 
 A utility for generating comprehensive network interface to physical slot mapping tables for PixStor servers. Maps physical NIC slots to Linux interfaces and optionally identifies switch port connections with MLAG awareness. ** VERY EXPERIMENTAL AS OF 7/21/2025 **
+
+### [Source Rules Generator](sourceRulesGen/README.md)
+
+A bash utility for generating source-based routing rules for network interfaces. Automatically extracts IP addresses and subnet information from interfaces and creates appropriate NetworkManager routing rules and routes for multi-homed configurations.
