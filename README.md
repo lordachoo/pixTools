@@ -4,6 +4,10 @@ A collection of utilities and tools for PixStor system administration, network v
 
 ## Tools
 
+### [Code Snippets](SNIPPETS.md)
+
+A collection of useful code snippets for PixStor administration tasks, including building idrac/man0 hostfile entries and NVME reconnection commands without disconnecting existing drives.
+
 ### [Network Topology Generator](network-topo-generator/README.md)
 
 A Python utility for generating visual network topology diagrams from switch interface data. Creates interactive visualizations of network connections by parsing switch interface information, producing SVG, HTML, PNG, PDF, and CSV outputs.
