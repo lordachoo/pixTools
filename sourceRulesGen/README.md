@@ -1,10 +1,10 @@
-# Source Rules Generator
+# Source Based Routing Rules Generator
 
 A bash utility script for generating source-based routing rules for network interfaces using NetworkManager.
 
 ## Overview
 
-This tool automatically generates NetworkManager CLI commands to set up source-based routing rules for multiple network interfaces. It extracts the actual IP addresses and subnet information from the interfaces and creates appropriate routing rules and routes.
+This tool automatically generates NetworkManager CLI commands to set up source-based routing rules for multiple network interfaces. It extracts the actual IP addresses and subnet information from the interfaces and creates appropriate routing rules and routes. It also generates complementary direct routes for storage nodes to ensure proper NVMEoF connectivity.
 
 ## Features
 
@@ -13,11 +13,12 @@ This tool automatically generates NetworkManager CLI commands to set up source-b
 - Supports exactly 2 or 4 interfaces as required by the routing configuration
 - Calculates network addresses from interface CIDR notation
 - Outputs ready-to-use NetworkManager CLI commands
+- Generates load-balanced direct routes for storage nodes with NVMEoF interfaces
 
 ## Usage
 
 ```bash
-./source_rules_gen.sh -I <interfaces>
+./sourceRulesGen -I <interfaces>
 ```
 
 ### Parameters
@@ -28,7 +29,7 @@ This tool automatically generates NetworkManager CLI commands to set up source-b
 ### Example
 
 ```bash
-./source_rules_gen.sh -I 100g1,100g2,100g3,100g4
+./sourceRulesGen -I 100g1,100g2,100g3,100g4
 ```
 
 This will generate output similar to:
@@ -47,6 +48,18 @@ nmcli dev reapply 100g1
 nmcli dev reapply 100g2
 nmcli dev reapply 100g3
 nmcli dev reapply 100g4
+
+## Add these to a list of dedicated routes for the storage nodes
+## LOAD Balance ${storageNodeNVMEoFIface1|2} between the NVMEoF Interfaces on the storage node appropriately
+
+nmcli con mod ${storageNodeNVMEoFIface1} +ipv4.routes "10.19.191.26"
+nmcli con mod ${storageNodeNVMEoFIface2} +ipv4.routes "10.19.191.27"
+nmcli con mod ${storageNodeNVMEoFIface1} +ipv4.routes "10.19.191.5"
+nmcli con mod ${storageNodeNVMEoFIface2} +ipv4.routes "10.19.191.25"
+nmcli con reload
+## Apply changes to both NVMEoF interfaces
+nmcli dev reapply ${storageNodeNVMEoFIface1}
+nmcli dev reapply ${storageNodeNVMEoFIface2}
 ```
 
 ## Implementation Details
@@ -62,9 +75,14 @@ The script performs the following operations:
    - Add source-based routing rules
    - Add routes to the appropriate routing tables
    - Reload connections and reapply device configurations
+4. Additionally generates storage node direct routes:
+   - Alternates between two NVMEoF interfaces (${storageNodeNVMEoFIface1} and ${storageNodeNVMEoFIface2})
+   - Creates direct routes to each compute node interface
+   - Provides commands to reload and apply these configurations
 
 ## Notes
 
 - The script only prints the commands and does not execute them
 - You can redirect the output to a file or pipe it to bash to execute the commands
 - Requires root privileges to execute the generated commands
+- The storage node section uses placeholder variables that need to be replaced with actual interface names
