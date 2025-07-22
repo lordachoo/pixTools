@@ -31,3 +31,23 @@ A utility for generating comprehensive network interface to physical slot mappin
 ### [Source Based Routing Rules Generator](sourceRulesGen/README.md)
 
 A bash utility for generating source-based routing rules for network interfaces. Automatically extracts IP addresses and subnet information from interfaces and creates appropriate NetworkManager routing rules and routes for multi-homed configurations.
+
+## Included Submodules
+
+### [rdmaPerfMon](https://github.com/lordachoo/rdmaPerfMon)
+
+A performance monitoring tool for RDMA (Remote Direct Memory Access) interfaces. Provides real-time statistics and metrics for RDMA connections, helping to diagnose performance issues and optimize network configurations for high-performance storage systems.
+
+## Installation
+
+To clone this repository with all submodules:
+
+```bash
+git clone --recursive https://github.com/lordachoo/pixTools.git
+```
+
+If you've already cloned the repository without the `--recursive` flag, you can fetch the submodules with:
+
+```bash
+git submodule update --init --recursive
+```
