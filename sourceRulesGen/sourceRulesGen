@@ -1,9 +1,5 @@
 #!/bin/bash
 
-# source_rules_gen.sh
-# Script to generate source-based routing rules for network interfaces
-# Usage: ./source_rules_gen.sh -I <interfaces> (comma-separated, must be 2 or 4 interfaces)
-
 # Function to display usage information
 usage() {
     echo "Usage: $0 -I <interfaces>"
@@ -84,3 +80,44 @@ echo "nmcli con reload"
 for interface in $INTERFACES; do
     echo "nmcli dev reapply ${interface}"
 done
+
+# Print a separator for the storage node dedicated routes section
+echo ""
+echo "## Add these to a list of dedicated routes for the storage nodes"
+echo "## LOAD Balance \${storageNodeNVMEoFIface1|2} between the NVMEoF Interfaces on the storage node appropriately"
+echo ""
+
+# Print dedicated routes for storage nodes
+INDEX=1
+for interface in $INTERFACES; do
+    # Get interface IP address
+    IP_INFO=$(ip -4 addr show $interface | grep -oP 'inet \K[\d./]+')
+    
+    if [ -z "$IP_INFO" ]; then
+        continue
+    fi
+    
+    # Extract IP address
+    IP_ADDR=$(echo $IP_INFO | cut -d'/' -f1)
+    
+    # Alternate between interface1 and interface2
+    if [ $((INDEX % 2)) -eq 1 ]; then
+        IFACE_NUM=1
+    else
+        IFACE_NUM=2
+    fi
+    
+    # Print the dedicated route template
+    echo "nmcli con mod \${storageNodeNVMEoFIface${IFACE_NUM}} +ipv4.routes \"${IP_ADDR}\""
+    
+    # Increment the index
+    INDEX=$((INDEX + 1))
+done
+
+# Print reload command for storage nodes
+echo "nmcli con reload"
+
+# Print the reapply commands for storage node interfaces
+echo "## Apply changes to both NVMEoF interfaces"
+echo "nmcli dev reapply \${storageNodeNVMEoFIface1}"
+echo "nmcli dev reapply \${storageNodeNVMEoFIface2}"
