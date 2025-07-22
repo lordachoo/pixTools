@@ -35,6 +35,7 @@ This tool automatically generates NetworkManager CLI commands to set up source-b
 This will generate output similar to:
 
 ```
+## GENERATING ROUTING RULES FOR INTERFACES: 100g1 100g2 100g3 100g4 FOR THIS NODE
 nmcli con mod 100g1 +ipv4.routing-rules "priority 10 from 10.19.191.26 table 1001"
 nmcli con mod 100g1 +ipv4.routes "10.19.191.0/24 table=1001"
 nmcli con mod 100g2 +ipv4.routing-rules "priority 10 from 10.19.191.27 table 1002"
