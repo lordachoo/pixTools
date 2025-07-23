@@ -4,7 +4,7 @@ A collection of utilities and tools for PixStor system administration, network v
 
 ## Tools
 
-### [Code Snippets](SNIPPETS.md)
+### [Code Snippets](SNIPPETS/SNIPPETS.md)
 
 A collection of useful code snippets for PixStor administration tasks, including building idrac/man0 hostfile entries and NVME reconnection commands without disconnecting existing drives.
 

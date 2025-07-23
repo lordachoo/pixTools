@@ -1,0 +1,34 @@
+#!/bin/bash
+# $0 this
+# $1 dry-run == yes/no
+# $2 policyFileName 
+
+function usage() {
+    echo "
+$0 [execute|test|yes] [policy-file-name*]
+* = Required
+Examples:
+./runExample test ./simple_pool_migrate.pol
+./runExample yes ./simple_pool_migrate.pol
+"
+}
+
+if [[ -z $1 ]] && [[ -z $2 ]]
+then
+    usage
+    exit
+fi
+
+if [[ $1 == "test" ]]
+then
+    echo "Execute: $1
+    Policy: $2"
+mmapplypolicy mmfs1 -P $2 -N px_all -g /mmfs1/.arcapix/policytmp -s /mmfs1/.arcapix/policytmp -m 4 -I test -L 2
+fi
+
+if [[ $1 == "yes" ]]
+then
+    echo "Execute: $1
+    Policy: $2"
+mmapplypolicy mmfs1 -P $2 -N px_all -g /mmfs1/.arcapix/policytmp -s /mmfs1/.arcapix/policytmp -m 4 -I yes -L 2
+fi

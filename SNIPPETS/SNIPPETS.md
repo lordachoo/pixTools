@@ -1,4 +1,11 @@
-# CODE SNIPPETS
+# SNIPPETS TABLE OF CONTENTS
+
+This file contains commonly used code snippets. For specialized snippets, see the following subdirectories:
+
+- [GPFS Snippets](GPFS/SNIPPETS.md) - Snippets related to GPFS operations
+- [Networking Snippets](NETWORKING/SNIPPETS.md) - Snippets for network configuration and troubleshooting
+
+# MOST USED CODE SNIPPETS
 
 ## Build idrac/man0 hostfile entries
 
@@ -16,4 +23,12 @@ cat hostfile_* >> /etc/hosts
 
 ```bash
 nvme list -v  | sed -n '/Express\ Controllers/,/Express\ Namespaces/p' | grep rdma| awk '{ if (!$11) {print $1} }' | xargs -I % bash -c 'nvme disconnect -d %' ; nvme connect-all
+```
+
+## RDMA PRIO CHECK
+
+- Change interface/range in the for loop
+
+```bash
+for iface in 100g{1..4}; do echo "=== $iface ==="; ethtool -S "$iface" | grep prio | grep bytes | grep -v ': 0'; echo; done
 ```
